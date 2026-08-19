@@ -152,23 +152,22 @@ useEffect(() => {
 
       const data = await response.json();
 
-      if (!data?.data?.children?.length) {
+            if (data.error) {
+        throw new Error(data.error);
+      }
+
+      if (!data?.posts?.length) {
         throw new Error("No Reddit posts returned");
       }
 
-      const redditPosts = data.data.children.slice(0, 50).map((item) => {
-        const post = item.data;
-
-        return {
-          id: post.id,
-          title: post.title,
-          author: post.author,
-          score: post.score,
-          comments: post.num_comments,
-          permalink: post.permalink,
-        };
-      });
-
+      const redditPosts = data.posts.map((post) => ({
+        id: post.id,
+        title: post.title,
+        author: post.author,
+        score: post.ups,
+        comments: post.num_comments,
+        permalink: post.permalink,
+      }));
       setPosts(analyzePosts(redditPosts));
     } catch (err) {
       console.warn("Using demo data:", err.message);
@@ -353,7 +352,7 @@ useEffect(() => {
 
                   {!demoMode && (
                     <a
-                      href={`https://www.reddit.com${post.permalink}`}
+                      href={post.permalink}
                       target="_blank"
                       rel="noreferrer"
                     >

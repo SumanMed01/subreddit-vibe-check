@@ -1,113 +1,64 @@
+// functions/api/reddit.js
+// Cloudflare Pages Function — runs server-side, so no CORS issue and no Reddit
+// account/API key needed. Hits Reddit's public read-only JSON feed directly.
+
 export async function onRequestGet(context) {
-  try {
-    const { request, env } = context;
+  const { request } = context;
+  const url = new URL(request.url);
+  const subreddit = url.searchParams.get('sub') || url.searchParams.get('subreddit');
 
-    const url = new URL(request.url);
-
-    const subreddit = url.searchParams
-      .get("subreddit")
-      ?.trim()
-      .replace(/^r\//i, "");
-
-    if (!subreddit) {
-      return Response.json(
-        { error: "Subreddit is required." },
-        { status: 400 }
-      );
-    }
-
-    if (!/^[a-zA-Z0-9_]{2,21}$/.test(subreddit)) {
-      return Response.json(
-        { error: "Invalid subreddit name." },
-        { status: 400 }
-      );
-    }
-
-    const clientId = env.REDDIT_CLIENT_ID;
-    const clientSecret = env.REDDIT_CLIENT_SECRET;
-
-    if (!clientId || !clientSecret) {
-      return Response.json(
-        {
-          error: "Reddit API credentials are not configured yet.",
-          approvalPending: true,
-        },
-        { status: 503 }
-      );
-    }
-
-    const credentials = btoa(`${clientId}:${clientSecret}`);
-
-    const tokenResponse = await fetch(
-      "https://www.reddit.com/api/v1/access_token",
-      {
-        method: "POST",
-
-        headers: {
-          Authorization: `Basic ${credentials}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-          "User-Agent":
-            "web:subreddit-vibe-check:1.0 (by /u/suman_vibecheck)",
-        },
-
-        body: new URLSearchParams({
-          grant_type: "client_credentials",
-        }),
-      }
-    );
-
-    if (!tokenResponse.ok) {
-      console.error(
-        "Reddit token error:",
-        await tokenResponse.text()
-      );
-
-      return Response.json(
-        { error: "Unable to authenticate with Reddit." },
-        { status: 502 }
-      );
-    }
-
-    const tokenData = await tokenResponse.json();
-
-    if (!tokenData.access_token) {
-      return Response.json(
-        { error: "Reddit did not return an access token." },
-        { status: 502 }
-      );
-    }
-
-    const redditResponse = await fetch(
-      `https://oauth.reddit.com/r/${encodeURIComponent(
-        subreddit
-      )}/hot?limit=50&raw_json=1`,
-      {
-        headers: {
-          Authorization: `Bearer ${tokenData.access_token}`,
-          "User-Agent":
-            "web:subreddit-vibe-check:1.0 (by /u/suman_vibecheck)",
-        },
-      }
-    );
-
-    if (!redditResponse.ok) {
-      return Response.json(
-        {
-          error: "Subreddit not found or Reddit API request failed.",
-        },
-        { status: redditResponse.status }
-      );
-    }
-
-    const redditData = await redditResponse.json();
-
-    return Response.json(redditData);
-  } catch (error) {
-    console.error("Cloudflare API error:", error);
-
-    return Response.json(
-      { error: "Internal server error." },
-      { status: 500 }
-    );
+  if (!subreddit) {
+    return json({ error: 'Missing ?sub=<subreddit> parameter' }, 400);
   }
+
+  // Basic sanity check on the subreddit name
+  if (!/^[a-zA-Z0-9_]{2,21}$/.test(subreddit)) {
+    return json({ error: 'That doesn\'t look like a valid subreddit name' }, 400);
+  }
+
+  const redditUrl = `https://www.reddit.com/r/${encodeURIComponent(subreddit)}/hot.json?limit=50&raw_json=1`;
+
+  try {
+    const res = await fetch(redditUrl, {
+      headers: {
+        // Reddit blocks requests with no/default User-Agent — this one is required.
+        'User-Agent': 'subreddit-vibe-check/1.0 (Cloudflare Pages Function)'
+      }
+    });
+
+    if (!res.ok) {
+      return json({ error: `Reddit returned ${res.status}. The subreddit may be private, banned, or misspelled.` }, res.status);
+    }
+
+    const data = await res.json();
+    const children = data?.data?.children || [];
+
+    if (children.length === 0) {
+      return json({ error: 'No posts found for that subreddit.' }, 404);
+    }
+
+    const posts = children.map(c => ({
+      id: c.data.id,
+      title: c.data.title,
+      author: c.data.author,
+      permalink: `https://www.reddit.com${c.data.permalink}`,
+      ups: c.data.ups,
+      num_comments: c.data.num_comments
+    }));
+
+    return json({ posts, subreddit });
+
+  } catch (err) {
+    return json({ error: 'Failed to reach Reddit: ' + err.message }, 502);
+  }
+}
+
+function json(body, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*'
+    }
+  });
 }
